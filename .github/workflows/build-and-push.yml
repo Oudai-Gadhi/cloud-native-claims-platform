@@ -18,7 +18,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # This step dynamically downcases your GitHub owner name (Oudai-Gadhi -> oudai-gadhi)
+      # This sets the variable in GITHUB_ENV for subsequent steps in this job
       - name: Set lower case owner name
         run: |
           echo "IMAGE_BASE=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' >> $GITHUB_ENV
@@ -39,6 +39,7 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
+          # Using ${{ env.IMAGE_BASE }} correctly pulls it from the environment map
           tags: |
             ${{ env.IMAGE_BASE }}/frontend:latest
             ${{ env.IMAGE_BASE }}/frontend:${{ github.sha }}
@@ -49,7 +50,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Same dynamic lowercase configuration for the backend job
+      # Sets the variable in GITHUB_ENV for subsequent steps in this job
       - name: Set lower case owner name
         run: |
           echo "IMAGE_BASE=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' >> $GITHUB_ENV
@@ -70,6 +71,7 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
+          # Using ${{ env.IMAGE_BASE }} correctly pulls it from the environment map
           tags: |
             ${{ env.IMAGE_BASE }}/backend:latest
             ${{ env.IMAGE_BASE }}/backend:${{ github.sha }}
