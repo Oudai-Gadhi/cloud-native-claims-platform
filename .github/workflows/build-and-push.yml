@@ -149,34 +149,52 @@ jobs:
           image-ref: ${{ env.IMAGE_BASE }}/backend:latest
           severity: CRITICAL,HIGH
           exit-code: 1
-
-
 # =========================
 # 7. OWASP ZAP (DAST)
 # =========================
-  zap:
-    needs: [build-frontend]
-    runs-on: ubuntu-latest
+zap:
+  needs: [build-frontend]
+  runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v4
+  steps:
+    - name: Set IMAGE_BASE lowercase
+      run: |
+        echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      # Run frontend container (Vite on 5173)
-      - name: Run frontend container
-        run: |
-          docker run -d -p 5173:5173 --name frontend \
-          ${{ env.IMAGE_BASE }}/frontend:latest
+    - name: Login to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Wait for app
-        run: sleep 15
+    - name: Pull frontend image
+      run: docker pull $IMAGE_BASE/frontend:latest
 
-      - name: Run OWASP ZAP baseline scan
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          target: http://localhost:5173
+    - name: Run frontend container
+      run: |
+        docker run -d \
+          -p 5173:5173 \
+          --name frontend \
+          $IMAGE_BASE/frontend:latest
 
-      - name: Cleanup
-        if: always()
-        run: |
-          docker stop frontend || true
-          docker rm frontend || true
+    - name: Wait for application startup
+      run: |
+        sleep 20
+        docker ps
+        docker logs frontend
+
+    - name: Verify application is reachable
+      run: |
+        curl -I http://localhost:5173
+
+    - name: Run OWASP ZAP Baseline Scan
+      uses: zaproxy/action-baseline@v0.12.0
+      with:
+        target: "http://localhost:5173"
+
+    - name: Cleanup
+      if: always()
+      run: |
+        docker stop frontend || true
+        docker rm frontend || true
