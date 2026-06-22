@@ -52,7 +52,7 @@ jobs:
       # Sets the variable in GITHUB_ENV for subsequent steps in this job
       - name: Set lower case owner name
         run: |
-          echo "IMAGE_BASE=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' >> $GITHUB_ENV
+          echo "IMAGE_BASE=$(echo ghcr.io/${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
