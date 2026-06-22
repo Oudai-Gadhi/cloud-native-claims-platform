@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Trivy FS scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           severity: CRITICAL,HIGH
@@ -127,14 +127,14 @@ jobs:
 
     steps:
       - name: Scan frontend image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.IMAGE_BASE }}/frontend:latest
           severity: CRITICAL,HIGH
           exit-code: 1
 
       - name: Scan backend image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.IMAGE_BASE }}/backend:latest
           severity: CRITICAL,HIGH
