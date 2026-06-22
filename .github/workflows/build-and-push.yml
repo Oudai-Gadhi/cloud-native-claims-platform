@@ -17,7 +17,7 @@ env:
 jobs:
 
 # =========================
-# 1. GITLEAKS (Secrets)
+# 1.GITLEAKS (Secrets)
 # =========================
   gitleaks:
     runs-on: ubuntu-latest
