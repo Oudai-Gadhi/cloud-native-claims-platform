@@ -8,6 +8,7 @@ permissions:
   contents: read
   packages: write
   issues: write
+  actions: write
 
 env:
   REGISTRY: ghcr.io
