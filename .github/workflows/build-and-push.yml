@@ -138,6 +138,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set IMAGE_BASE lowercase
+        run: |
+          echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name:   Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull frontend image
+        run: docker pull $IMAGE_BASE/frontend:latest
+
+      - name: Pull backend image
+        run: docker pull $IMAGE_BASE/backend:latest
+
       - name: Scan frontend image
         uses: aquasecurity/trivy-action@master
         with:
