@@ -175,38 +175,38 @@ jobs:
       - name: Pull frontend image
       run: docker pull $IMAGE_BASE/frontend:latest
 
-    - name: Run frontend container
-      run: |
-        docker run -d \
-          -p 5173:5173 \
-          --name frontend \
-          $IMAGE_BASE/frontend:latest
+      - name: Run frontend container
+        run: |
+          docker run -d \
+            -p 5173:5173 \
+            --name frontend \
+            $IMAGE_BASE/frontend:latest
 
-    - name: Wait for app
-      run: |
-        sleep 20
-        curl -I http://localhost:5173
+      - name: Wait for app
+        run: |
+          sleep 20
+          curl -I http://localhost:5173
 
-    - name: Create reports folder
-      run: mkdir -p zap-reports
+      - name: Create reports folder
+        run: mkdir -p zap-reports
 
-    - name: Run OWASP ZAP Baseline
-      run: |
-        docker run --rm \
-          --network=host \
-          -v $(pwd)/zap-reports:/zap/wrk/:rw \
-          ghcr.io/zaproxy/zaproxy:stable \
-          zap-baseline.py \
-          -t http://localhost:5173 \
-          -J zap.json \
-          -w zap.md \
-          -r zap.html || true
+      - name: Run OWASP ZAP Baseline
+        run: |
+          docker run --rm \
+            --network=host \
+            -v $(pwd)/zap-reports:/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://localhost:5173 \
+            -J zap.json \
+            -w zap.md \
+            -r zap.html || true
 
-    - name: Show generated reports
-      run: ls -lah zap-reports
+      - name: Show generated reports
+        run: ls -lah zap-reports
 
-    - name: Upload ZAP reports to GitHub
-      uses: actions/upload-artifact@v4
-      with:
-        name: zap-report
-        path: zap-reports/*
+      - name: Upload ZAP reports to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap-reports/*
