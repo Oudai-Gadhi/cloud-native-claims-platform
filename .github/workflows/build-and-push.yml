@@ -175,7 +175,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull frontend image
-      run: docker pull $IMAGE_BASE/frontend:latest
+        run: docker pull $IMAGE_BASE/frontend:latest
 
       - name: Run frontend container
         run: |
