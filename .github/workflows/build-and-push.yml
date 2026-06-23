@@ -8,50 +8,37 @@ permissions:
   contents: read
   packages: write
   issues: write
-  actions: write
 
 env:
   REGISTRY: ghcr.io
 
 
+# =========================
+# 1. SAST + SECRETS
+# =========================
 jobs:
 
-# =========================
-# 1.GITLEAKS (Secrets)
-# =========================
   gitleaks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v2
 
 
-# =========================
-# 2. SEMGREP (SAST)
-# =========================
   semgrep:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Run Semgrep
-        uses: returntocorp/semgrep-action@v1
+      - uses: returntocorp/semgrep-action@v1
         with:
           config: p/ci
 
 
-# =========================
-# 3. TRIVY FILESYSTEM SCAN
-# =========================
   trivy-fs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Trivy FS scan
-        uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           severity: CRITICAL,HIGH
@@ -59,10 +46,67 @@ jobs:
 
 
 # =========================
-# 4. BUILD FRONTEND
+# 2. BUILD (NO PUSH YET)
 # =========================
-  build-frontend:
+  build-images:
     needs: [gitleaks, semgrep, trivy-fs]
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_base: ${{ steps.set.outputs.image_base }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set IMAGE_BASE lowercase
+        id: set
+        run: |
+          IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')
+          echo "image_base=$IMAGE_BASE" >> $GITHUB_OUTPUT
+
+      - name: Build frontend (LOCAL)
+        run: docker build -t frontend:test ./frontend
+
+      - name: Build backend (LOCAL)
+        run: docker build -t backend:test ./backend
+
+
+# =========================
+# 3. TRIVY IMAGE SCAN (LOCAL)
+# =========================
+  trivy-image:
+    needs: [build-images]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build frontend (again for scan context)
+        run: docker build -t frontend:test ./frontend
+
+      - name: Build backend
+        run: docker build -t backend:test ./backend
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: frontend:test
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: backend:test
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+
+# =========================
+# 4. PUSH TO GHCR (ONLY IF CLEAN)
+# =========================
+  push-images:
+    needs: [trivy-image]
     runs-on: ubuntu-latest
 
     steps:
@@ -72,14 +116,10 @@ jobs:
         run: |
           echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -87,18 +127,26 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
-          file: ./frontend/Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE_BASE }}/frontend:latest
             ${{ env.IMAGE_BASE }}/frontend:${{ github.sha }}
 
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/backend:latest
+            ${{ env.IMAGE_BASE }}/backend:${{ github.sha }}
+
 
 # =========================
-# 5. BUILD BACKEND
+# 5. ZAP (DAST)
 # =========================
-  build-backend:
-    needs: [gitleaks, semgrep, trivy-fs]
+  zap:
+    needs: [push-images]
     runs-on: ubuntu-latest
 
     steps:
@@ -108,82 +156,6 @@ jobs:
         run: |
           echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & Push Backend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: |
-            ${{ env.IMAGE_BASE }}/backend:latest
-            ${{ env.IMAGE_BASE }}/backend:${{ github.sha }}
-
-
-# =========================
-# 6. TRIVY IMAGE SCAN
-# =========================
-  trivy-image:
-    needs: [build-frontend, build-backend]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Set IMAGE_BASE lowercase
-        run: |
-          echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
-      - name:   Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull frontend image
-        run: docker pull $IMAGE_BASE/frontend:latest
-
-      - name: Pull backend image
-        run: docker pull $IMAGE_BASE/backend:latest
-
-      - name: Scan frontend image
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE_BASE }}/frontend:latest
-          severity: CRITICAL,HIGH
-          exit-code: 1
-
-      - name: Scan backend image
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE_BASE }}/backend:latest
-          severity: CRITICAL,HIGH
-          exit-code: 1
-# =========================
-# 7. OWASP ZAP (DAST)
-# =========================
-  # =========================
-# 7. OWASP ZAP (DAST)
-# =========================
-  zap:
-    needs: [build-frontend]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Set IMAGE_BASE lowercase
-        run: |
-          echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -196,36 +168,25 @@ jobs:
 
       - name: Run frontend container
         run: |
-          docker run -d \
-            -p 5173:5173 \
-            --name frontend \
-            $IMAGE_BASE/frontend:latest
+          docker run -d -p 5173:5173 --name frontend $IMAGE_BASE/frontend:latest
 
       - name: Wait for app
         run: |
           sleep 20
           curl -I http://localhost:5173
 
-      - name: Create reports folder
-        run: mkdir -p zap-reports
-
-      - name: Run OWASP ZAP Baseline
+      - name: Run OWASP ZAP
         run: |
+          mkdir -p zap-reports
           docker run --rm \
-            --user root \
             --network=host \
             -v $PWD/zap-reports:/zap/wrk:rw \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
             -t http://localhost:5173 \
-            -J zap.json \
-            -w zap.md \
-            -r zap.html || true
+            -J zap.json -w zap.md -r zap.html || true
 
-      - name: Show generated reports
-        run: ls -lah zap-reports
-
-      - name: Upload ZAP reports to GitHub
+      - name: Upload ZAP reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
