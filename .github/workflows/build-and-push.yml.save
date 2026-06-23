@@ -153,7 +153,7 @@ jobs:
           exit-code: 1
 # =========================
 # 7. OWASP ZAP (DAST)
-# =========================
+# ===========
   # =========================
 # 7. OWASP ZAP (DAST)
 # =========================
@@ -165,6 +165,7 @@ jobs:
       - name: Set IMAGE_BASE lowercase
         run: |
           echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -183,8 +184,7 @@ jobs:
           $IMAGE_BASE/frontend:latest
 
     - name: Wait for app
-      run: |
-        sleep 20
+      run: |        sleep 20
         curl -I http://localhost:5173
 
     - name: Create reports folder
@@ -209,4 +209,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: zap-report
-        path: zap-reports/*
+        path: zap-reports/*1~- name: Pull frontend image
+      run: docker pull $IMAGE_BASE/frontend:latest
+
+
