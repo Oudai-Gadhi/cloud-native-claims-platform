@@ -195,7 +195,7 @@ jobs:
       - name: Run OWASP ZAP Baseline
         run: |
           docker run --rm \
-            --user root
+            --user root \
             --network=host \
             -v $PWD/zap-reports:/zap/wrk:rw \
             ghcr.io/zaproxy/zaproxy:stable \
