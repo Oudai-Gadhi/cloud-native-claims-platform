@@ -178,6 +178,7 @@ jobs:
         run: |
           mkdir -p zap-reports
           docker run --rm \
+            --user root \
             --network=host \
             -v $PWD/zap-reports:/zap/wrk:rw \
             ghcr.io/zaproxy/zaproxy:stable \
