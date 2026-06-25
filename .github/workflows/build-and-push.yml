@@ -26,12 +26,16 @@ jobs:
 
 
   semgrep:
+    name: Static Application Security Testing (SAST)
     runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep # Runs faster than the marketplace wrapper action
     steps:
-      - uses: actions/checkout@v4
-      - uses: returntocorp/semgrep-action@v1
-        with:
-          config: p/ci
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: semgrep scan --config auto --error # 'auto' automatically detects languages
 
 
   trivy-fs:
