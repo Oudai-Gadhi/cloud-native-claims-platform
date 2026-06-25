@@ -167,12 +167,12 @@ jobs:
 
       - name: Run frontend container
         run: |
-          docker run -d -p 5173:5173 --name frontend $IMAGE_BASE/frontend:latest
+          docker run -d -p 80:80 --name frontend $IMAGE_BASE/frontend:latest
 
       - name: Wait for app
         run: |
           sleep 20
-          curl -I http://localhost:5173
+          curl -I http://localhost:80
 
       - name: Run OWASP ZAP
         run: |
@@ -183,7 +183,7 @@ jobs:
             -v $PWD/zap-reports:/zap/wrk:rw \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
-            -t http://localhost:5173 \
+            -t http://localhost:80 \
             -J zap.json -w zap.md -r zap.html || true
 
       - name: Upload ZAP reports
