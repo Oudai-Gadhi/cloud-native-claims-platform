@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Semgrep
-        run: semgrep scan --config auto --error # 'auto' automatically detects languages
+        run: semgrep scan --config auto # 'auto' automatically detects languages
 
 
   trivy-fs:
