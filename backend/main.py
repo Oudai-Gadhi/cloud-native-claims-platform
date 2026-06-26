@@ -134,7 +134,7 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://frontend.local"],
+    allow_origins=["http://insurance.local", "http://frontend.local"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
