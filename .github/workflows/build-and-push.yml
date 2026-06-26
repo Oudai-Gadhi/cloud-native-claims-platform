@@ -148,10 +148,12 @@ jobs:
 # =========================
 # 5. ZAP (DAST)
 # =========================
+  # =========================
+# 5. ZAP (DAST)
+# =========================
   zap:
     needs: [push-images]
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -171,12 +173,21 @@ jobs:
 
       - name: Run frontend container
         run: |
-          docker run -d -p 80:80 --name frontend $IMAGE_BASE/frontend:latest
+          docker run -d -p 8080:8080 --name frontend $IMAGE_BASE/frontend:latest
 
       - name: Wait for app
         run: |
-          sleep 20
-          curl -I http://localhost:80
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://localhost:8080; then
+              echo "App is up"
+              exit 0
+            fi
+            echo "Waiting for app... ($i)"
+            sleep 2
+          done
+          echo "App did not become ready in time"
+          docker logs frontend
+          exit 1
 
       - name: Run OWASP ZAP
         run: |
@@ -187,7 +198,7 @@ jobs:
             -v $PWD/zap-reports:/zap/wrk:rw \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
-            -t http://localhost:80 \
+            -t http://localhost:8080 \
             -J zap.json -w zap.md -r zap.html || true
 
       - name: Upload ZAP reports
@@ -196,3 +207,7 @@ jobs:
         with:
           name: zap-report
           path: zap-reports/
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f frontend || true
