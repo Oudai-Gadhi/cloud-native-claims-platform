@@ -390,7 +390,7 @@ const AdminDashboard = ({ isAuth }: { isAuth: boolean }) => {
                   </h4>
                   <div className="flex gap-4 flex-wrap">
                     {claim.attachments.map((att: any) => (
-                      <a key={att.id} href={`/${att.file_path}`} target="_blank" className="text-green-700 hover:bg-green-100 transition flex items-center gap-2 bg-white px-4 py-2.5 rounded-lg border-2 border-green-200 font-semibold shadow-sm">
+                      <a key={att.id} href={`${att.download_url}`} target="_blank" rel="noopener noreferrer" className="...">
                         <FileText size={20} />
                         {att.file_name}
                       </a>
