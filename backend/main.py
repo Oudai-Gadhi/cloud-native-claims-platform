@@ -9,11 +9,12 @@ from typing import List, Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from dotenv import load_dotenv
+import uuid
+from fastapi.responses import FileResponse
 
 load_dotenv()
 
@@ -35,14 +36,14 @@ def send_status_email(to_email: str, claim_id: int, full_name: str, new_status: 
         msg['Subject'] = f"Mise à jour de votre déclaration STAR #{claim_id}"
 
         status_text = "en cours de révision" if new_status == "reviewed" else "clôturé"
-        
+
         body = f"""
         Bonjour {full_name},
-        
+
         Nous vous informons que l'état de votre déclaration d'accident #{claim_id} a été mis à jour.
-        
+
         Nouvel état : {status_text.upper()}
-        
+
         Merci de votre confiance,
         L'équipe STAR ASSURANCES Tunisie.
         """
@@ -63,6 +64,13 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+
+# --- SCAN AND CLEAN DIRECTORY ---
+SCAN_INPUT_DIR = os.environ.get("SCAN_INPUT_DIR", "/mnt/scan-input")
+CLEAN_OUTPUT_DIR = os.environ.get("CLEAN_OUTPUT_DIR", "/mnt/clean-output")
+
+os.makedirs(SCAN_INPUT_DIR, exist_ok=True)
+
 # --- Models ---
 class Claim(Base):
     __tablename__ = "claims"
@@ -82,8 +90,9 @@ class Attachment(Base):
     id = Column(Integer, primary_key=True, index=True)
     claim_id = Column(Integer, ForeignKey("claims.id"))
     file_name = Column(String(255))
-    file_path = Column(String(255))
+    file_path = Column(String(255))          # kept, no longer used to locate the file
     file_type = Column(String(50))
+    stored_filename = Column(String(255), nullable=True)  # used to look the file up on clean-output
     claim = relationship("Claim", back_populates="attachments")
 
 def init_db():
@@ -92,7 +101,7 @@ def init_db():
         try:
             print(f"Connecting to database at {DATABASE_URL}...")
             Base.metadata.create_all(bind=engine)
-            
+
             # Simple migration hack for existing DB
             with engine.connect() as conn:
                 # Add email column if not exists
@@ -102,7 +111,15 @@ def init_db():
                     print("Database migrated: added email column")
                 except Exception:
                     pass
-                
+
+                # Add stored_filename column if not exists
+                try:
+                    conn.execute(text("ALTER TABLE attachments ADD COLUMN stored_filename VARCHAR(255) NULL"))
+                    conn.commit()
+                    print("Database migrated: added attachments.stored_filename column")
+                except Exception:
+                    pass
+
                 # Drop accident_description column if exists
                 try:
                     conn.execute(text("ALTER TABLE claims DROP COLUMN accident_description"))
@@ -127,10 +144,6 @@ async def lifespan(app: FastAPI):
 # --- FastAPI App ---
 app = FastAPI(title="Insurance Accident Declaration API", lifespan=lifespan)
 
-# Serve uploaded files
-if not os.path.exists("uploads"):
-    os.makedirs("uploads")
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -192,17 +205,26 @@ async def create_claim(
     db.commit()
     db.refresh(db_claim)
 
-    upload_dir = "uploads"
     for file in files:
-        unique_filename = f"{db_claim.id}_{datetime.now().timestamp()}_{file.filename}"
-        file_path = os.path.join(upload_dir, unique_filename)
-        with open(file_path, "wb") as buffer:
+        original_name = os.path.basename(file.filename or "upload")
+        unique_filename = f"{db_claim.id}_{uuid.uuid4().hex}_{original_name}"
+
+        final_path = os.path.join(SCAN_INPUT_DIR, unique_filename)
+        tmp_path = os.path.join(SCAN_INPUT_DIR, f".tmp.{unique_filename}")
+
+        with open(tmp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
+        # Atomic rename so the av-scanner's "stable size across two polls"
+        # check never sees a half-written file under its final name.
+        os.rename(tmp_path, final_path)
+
         db_attachment = Attachment(
             claim_id=db_claim.id,
             file_name=file.filename,
-            file_path=file_path,
-            file_type=file.content_type
+            file_path=final_path,        # kept populated for backward compat
+            file_type=file.content_type,
+            stored_filename=unique_filename
         )
         db.add(db_attachment)
     db.commit()
@@ -213,7 +235,18 @@ async def get_claims(db: Session = Depends(get_db)):
     claims = db.query(Claim).all()
     result = []
     for claim in claims:
-        attachments = [{"id": a.id, "file_name": a.file_name, "file_path": a.file_path} for a in claim.attachments]
+        attachments = []
+        for a in claim.attachments:
+            if not a.stored_filename:
+                continue
+            if os.path.isfile(os.path.join(CLEAN_OUTPUT_DIR, a.stored_filename)):
+                attachments.append({
+                    "id": a.id,
+                    "file_name": a.file_name,
+                    "download_url": f"/api/attachments/{a.id}/file"
+                })
+        # attachments not yet clean (still scanning, or rejected) are
+        # simply omitted - the admin dashboard sees nothing for them.
         result.append({
             "id": claim.id,
             "full_name": claim.full_name,
@@ -233,7 +266,7 @@ async def update_claim_status(claim_id: int, status: str, db: Session = Depends(
     db_claim = db.query(Claim).filter(Claim.id == claim_id).first()
     if not db_claim:
         raise HTTPException(status_code=404, detail="Claim not found")
-    
+
     old_status = db_claim.status
     db_claim.status = status
     db.commit()
@@ -243,6 +276,22 @@ async def update_claim_status(claim_id: int, status: str, db: Session = Depends(
         send_status_email(db_claim.email, db_claim.id, db_claim.full_name, status)
 
     return {"message": "Status updated successfully"}
+
+
+@app.get("/api/attachments/{attachment_id}/file")
+async def download_attachment(attachment_id: int, db: Session = Depends(get_db)):
+    attachment = db.query(Attachment).filter(Attachment.id == attachment_id).first()
+    if not attachment or not attachment.stored_filename:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    file_path = os.path.join(CLEAN_OUTPUT_DIR, attachment.stored_filename)
+    if not os.path.isfile(file_path):
+        # Either still being scanned, or was flagged/errored and deleted.
+        # Either way: nothing to show. No distinction is surfaced to the caller.
+        raise HTTPException(status_code=404, detail="File not available")
+
+    return FileResponse(path=file_path, filename=attachment.file_name)
+
 
 if __name__ == "__main__":
     import uvicorn
