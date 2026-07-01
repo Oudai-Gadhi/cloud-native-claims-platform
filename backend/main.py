@@ -4,17 +4,21 @@ import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
+
+import jwt
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, text
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
+from passlib.context import CryptContext
 from dotenv import load_dotenv
 import uuid
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -58,6 +62,32 @@ def send_status_email(to_email: str, claim_id: int, full_name: str, new_status: 
     except Exception as e:
         print(f"Failed to send email: {e}")
 
+# --- Auth Config ---
+# JWT_SECRET must come from the environment (k8s Secret) - no hardcoded fallback.
+JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+COOKIE_NAME = "star_admin_session"
+# Cookies only work over HTTPS when secure=True. Set COOKIE_SECURE=false in
+# your dev environment (e.g. plain-http minikube) and true anywhere real.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# --- Upload validation config ---
+# Client-side <input accept> is cosmetic only - this is the real gate.
+ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png"}
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+# Real magic-byte signatures, since both filename and content_type are
+# fully client-supplied and spoofable. This is a first-line check only -
+# the YARA/ClamAV pipeline downstream remains the authoritative scan.
+MAGIC_SIGNATURES = {
+    ".pdf": [b"%PDF"],
+    ".jpg": [b"\xff\xd8\xff"],
+    ".jpeg": [b"\xff\xd8\xff"],
+    ".png": [b"\x89PNG\r\n\x1a\n"],
+}
+
 # --- Database Setup ---
 DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://user:userpassword@db:3306/insurance_db")
 engine = create_engine(DATABASE_URL)
@@ -94,6 +124,15 @@ class Attachment(Base):
     file_type = Column(String(50))
     stored_filename = Column(String(255), nullable=True)  # used to look the file up on clean-output
     claim = relationship("Claim", back_populates="attachments")
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(64), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
 
 def init_db():
     retries = 10
@@ -180,7 +219,95 @@ def get_db():
     finally:
         db.close()
 
-# --- Routes ---
+# --- Auth helpers ---
+
+def create_access_token(username: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
+    payload = {"sub": username, "exp": expire}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def decode_access_token(token: str) -> str:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload["sub"]
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+def require_admin(request: Request) -> str:
+    """Dependency for any admin-only route. Validates the JWT from the
+    httpOnly cookie on every request - this is the actual security boundary,
+    independent of anything the frontend does or doesn't render."""
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return decode_access_token(token)
+
+def validate_upload(file: UploadFile, header_bytes: bytes) -> None:
+    """Reject anything that isn't genuinely PDF/JPG/PNG. Checks extension,
+    declared content_type, AND actual magic bytes - all three must agree.
+    Any one of these alone is spoofable by the client."""
+    original_name = os.path.basename(file.filename or "upload")
+    ext = os.path.splitext(original_name)[1].lower()
+
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Extension non autorisée: {ext or '(aucune)'}")
+
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Type de fichier non autorisé: {file.content_type}")
+
+    signatures = MAGIC_SIGNATURES.get(ext, [])
+    if not any(header_bytes.startswith(sig) for sig in signatures):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le contenu du fichier '{original_name}' ne correspond pas à son extension déclarée",
+        )
+
+# --- Auth Routes ---
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/login")
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
+    user = db.query(AdminUser).filter(AdminUser.username == payload.username).first()
+
+    # Same generic error whether username doesn't exist or password is wrong -
+    # never reveal which one failed.
+    invalid_creds = HTTPException(status_code=401, detail="Identifiants invalides")
+
+    if not user or not user.is_active:
+        raise invalid_creds
+    if not pwd_context.verify(payload.password, user.password_hash):
+        raise invalid_creds
+
+    user.last_login_at = datetime.utcnow()
+    db.commit()
+
+    token = create_access_token(user.username)
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="strict",
+        max_age=JWT_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+    return {"status": "ok", "username": user.username}
+
+@app.post("/api/logout")
+def logout(response: Response):
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"status": "ok"}
+
+@app.get("/api/me")
+def me(username: str = Depends(require_admin)):
+    return {"username": username}
+
+# --- Claim Routes ---
 
 @app.post("/api/claims")
 async def create_claim(
@@ -193,6 +320,15 @@ async def create_claim(
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
+    # Validate every file BEFORE creating any DB rows or writing anything
+    # to disk, so a rejected upload doesn't leave a half-created claim behind.
+    headers = []
+    for file in files:
+        header_bytes = await file.read(8)
+        await file.seek(0)
+        validate_upload(file, header_bytes)
+        headers.append(header_bytes)
+
     db_claim = Claim(
         full_name=full_name,
         email=email,
@@ -231,7 +367,7 @@ async def create_claim(
     return {"message": "Claim submitted successfully", "claim_id": db_claim.id}
 
 @app.get("/api/claims")
-async def get_claims(db: Session = Depends(get_db)):
+async def get_claims(username: str = Depends(require_admin), db: Session = Depends(get_db)):
     claims = db.query(Claim).all()
     result = []
     for claim in claims:
@@ -262,7 +398,12 @@ async def get_claims(db: Session = Depends(get_db)):
     return result
 
 @app.patch("/api/claims/{claim_id}/status")
-async def update_claim_status(claim_id: int, status: str, db: Session = Depends(get_db)):
+async def update_claim_status(
+    claim_id: int,
+    status: str,
+    username: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     db_claim = db.query(Claim).filter(Claim.id == claim_id).first()
     if not db_claim:
         raise HTTPException(status_code=404, detail="Claim not found")
@@ -279,7 +420,11 @@ async def update_claim_status(claim_id: int, status: str, db: Session = Depends(
 
 
 @app.get("/api/attachments/{attachment_id}/file")
-async def download_attachment(attachment_id: int, db: Session = Depends(get_db)):
+async def download_attachment(
+    attachment_id: int,
+    username: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     attachment = db.query(Attachment).filter(Attachment.id == attachment_id).first()
     if not attachment or not attachment.stored_filename:
         raise HTTPException(status_code=404, detail="Attachment not found")

@@ -5,6 +5,9 @@ import { Shield, FileText, LayoutDashboard, CheckCircle, Upload, AlertCircle, Lo
 
 const API_BASE_URL = '/api';
 
+// Send the httpOnly session cookie on every request.
+axios.defaults.withCredentials = true;
+
 // --- Components ---
 
 const Navbar = ({ isAdmin, onLogout }: { isAdmin: boolean; onLogout: () => void }) => (
@@ -41,15 +44,22 @@ const Navbar = ({ isAdmin, onLogout }: { isAdmin: boolean; onLogout: () => void 
 const Login = ({ onLogin }: { onLogin: () => void }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (username === 'admin' && password === 'admin123') {
+    setSubmitting(true);
+    try {
+      // Real backend check. The server sets an httpOnly session cookie on
+      // success - the frontend never sees or stores the token itself.
+      await axios.post(`${API_BASE_URL}/login`, { username, password });
       onLogin();
       navigate('/admin');
-    } else {
-      alert('Identifiants invalides (admin / admin123)');
+    } catch (error) {
+      alert('Identifiants invalides');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -64,19 +74,25 @@ const Login = ({ onLogin }: { onLogin: () => void }) => {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700">Nom d'utilisateur</label>
-          <input type="text" required value={username} onChange={e => setUsername(e.target.value)} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2 border" placeholder="admin" />
+          <input type="text" required value={username} onChange={e => setUsername(e.target.value)} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2 border" />
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700">Mot de passe</label>
-          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2 border" placeholder="admin123" />
+          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2 border" />
         </div>
-        <button type="submit" className="w-full bg-green-700 text-white py-3 rounded-lg font-bold hover:bg-green-800 transition shadow-md">
-          Se connecter
+        <button type="submit" disabled={submitting} className="w-full bg-green-700 text-white py-3 rounded-lg font-bold hover:bg-green-800 transition shadow-md disabled:opacity-60">
+          {submitting ? 'Connexion...' : 'Se connecter'}
         </button>
       </form>
     </div>
   );
 };
+
+// Files the app will accept. This is a UX convenience only - the backend
+// independently re-validates extension, content-type, AND magic bytes on
+// every upload, since anything client-side is trivially spoofable.
+const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+const ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png'];
 
 const DeclarationForm = () => {
   const [carData, setCarData] = useState<Record<string, string[]>>({});
@@ -84,7 +100,7 @@ const DeclarationForm = () => {
   const [selectedMake, setSelectedMake] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [immatriculation, setImmatriculation] = useState('');
-  
+
   const [formData, setFormData] = useState({
     full_name: '',
     email: '',
@@ -110,9 +126,29 @@ const DeclarationForm = () => {
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setFiles(Array.from(e.target.files));
+    if (!e.target.files) return;
+
+    const selected = Array.from(e.target.files);
+    const valid: File[] = [];
+    const rejected: string[] = [];
+
+    selected.forEach(file => {
+      const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+      const typeOk = ALLOWED_MIME_TYPES.includes(file.type);
+      const extOk = ALLOWED_EXTENSIONS.includes(ext);
+
+      if (typeOk && extOk) {
+        valid.push(file);
+      } else {
+        rejected.push(file.name);
+      }
+    });
+
+    if (rejected.length > 0) {
+      alert(`Fichier(s) refusé(s) (formats acceptés: PDF, JPG, PNG) : ${rejected.join(', ')}`);
     }
+
+    setFiles(valid);
   };
 
   const validateTunisianData = () => {
@@ -159,9 +195,10 @@ const DeclarationForm = () => {
     try {
       await axios.post(`${API_BASE_URL}/claims`, data);
       setSuccess(true);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Submission failed', error);
-      alert('Erreur lors de la soumission. Veuillez réessayer.');
+      const detail = error?.response?.data?.detail;
+      alert(detail ? `Erreur: ${detail}` : 'Erreur lors de la soumission. Veuillez réessayer.');
     } finally {
       setLoading(false);
     }
@@ -234,9 +271,9 @@ const DeclarationForm = () => {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700">Marque</label>
-                <select 
-                  required 
-                  value={selectedMake} 
+                <select
+                  required
+                  value={selectedMake}
                   onChange={(e) => { setSelectedMake(e.target.value); setSelectedModel(''); }}
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2.5 border bg-white"
                 >
@@ -246,10 +283,10 @@ const DeclarationForm = () => {
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700">Modèle</label>
-                <select 
-                  required 
+                <select
+                  required
                   disabled={!selectedMake}
-                  value={selectedModel} 
+                  value={selectedModel}
                   onChange={(e) => setSelectedModel(e.target.value)}
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2.5 border bg-white disabled:bg-gray-100"
                 >
@@ -260,12 +297,12 @@ const DeclarationForm = () => {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700">Immatriculation (ex: 123 TN 4567 ou RS 123456)</label>
-              <input 
-                required 
-                placeholder="123 TN 4567" 
-                value={immatriculation} 
-                onChange={(e) => setImmatriculation(e.target.value)} 
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2.5 border uppercase" 
+              <input
+                required
+                placeholder="123 TN 4567"
+                value={immatriculation}
+                onChange={(e) => setImmatriculation(e.target.value)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 p-2.5 border uppercase"
               />
             </div>
             <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-100">
@@ -305,13 +342,13 @@ const DeclarationForm = () => {
   );
 };
 
-const AdminDashboard = ({ isAuth }: { isAuth: boolean }) => {
+const AdminDashboard = ({ isAdmin }: { isAdmin: boolean | null }) => {
   const [claims, setClaims] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (isAuth) fetchClaims();
-  }, [isAuth]);
+    if (isAdmin) fetchClaims();
+  }, [isAdmin]);
 
   const fetchClaims = async () => {
     try {
@@ -333,7 +370,16 @@ const AdminDashboard = ({ isAuth }: { isAuth: boolean }) => {
     }
   };
 
-  if (!isAuth) return <Navigate to="/login" />;
+  // isAdmin is null while the /me check is still in flight - don't redirect
+  // prematurely, or a real logged-in agent gets bounced on every refresh.
+  if (isAdmin === null) {
+    return (
+      <div className="flex justify-center p-20">
+        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-green-700"></div>
+      </div>
+    );
+  }
+  if (!isAdmin) return <Navigate to="/login" />;
 
   return (
     <div className="container mx-auto px-4 pb-12">
@@ -346,7 +392,7 @@ const AdminDashboard = ({ isAuth }: { isAuth: boolean }) => {
           {claims.length} Déclarations au total
         </div>
       </div>
-      
+
       {loading ? (
         <div className="flex justify-center p-20">
           <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-green-700"></div>
@@ -361,13 +407,13 @@ const AdminDashboard = ({ isAuth }: { isAuth: boolean }) => {
                   <p className="text-gray-500 font-medium">Référence: #STAR-{claim.id}-{new Date(claim.created_at).getFullYear()}</p>
                 </div>
                 <div className={`px-6 py-2 rounded-full font-bold uppercase text-sm shadow-sm ${
-                  claim.status === 'pending' ? 'bg-yellow-100 text-yellow-800' : 
+                  claim.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                   claim.status === 'processed' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
                 }`}>
                   {claim.status === 'pending' ? 'En attente' : claim.status === 'processed' ? 'Clôturé' : 'Révisé'}
                 </div>
               </div>
-              
+
               <div className="grid md:grid-cols-2 gap-8 mb-8">
                 <div className="bg-green-50/50 p-5 rounded-xl border border-green-100">
                   <h4 className="font-bold text-green-900 mb-3 border-b border-green-200 pb-1">Client</h4>
@@ -418,26 +464,36 @@ const AdminDashboard = ({ isAuth }: { isAuth: boolean }) => {
 };
 
 const App = () => {
-  const [isAdmin, setIsAdmin] = useState(() => localStorage.getItem('star_admin') === 'true');
+  // null = "checking with backend", true/false = confirmed state.
+  // Never trust a client-set flag (e.g. localStorage) as the source of
+  // truth - the backend's /me endpoint (which validates the httpOnly
+  // JWT cookie) is the only thing that decides this.
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
 
-  const handleLogin = () => {
-    setIsAdmin(true);
-    localStorage.setItem('star_admin', 'true');
-  };
+  useEffect(() => {
+    axios.get(`${API_BASE_URL}/me`)
+      .then(() => setIsAdmin(true))
+      .catch(() => setIsAdmin(false));
+  }, []);
 
-  const handleLogout = () => {
-    setIsAdmin(false);
-    localStorage.removeItem('star_admin');
+  const handleLogin = () => setIsAdmin(true);
+
+  const handleLogout = async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/logout`);
+    } finally {
+      setIsAdmin(false);
+    }
   };
 
   return (
     <Router>
       <div className="min-h-screen w-full bg-slate-50 pb-10">
-        <Navbar isAdmin={isAdmin} onLogout={handleLogout} />
+        <Navbar isAdmin={isAdmin === true} onLogout={handleLogout} />
         <Routes>
           <Route path="/" element={<DeclarationForm />} />
           <Route path="/login" element={<Login onLogin={handleLogin} />} />
-          <Route path="/admin" element={<AdminDashboard isAuth={isAdmin} />} />
+          <Route path="/admin" element={<AdminDashboard isAdmin={isAdmin} />} />
         </Routes>
       </div>
     </Router>
