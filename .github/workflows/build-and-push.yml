@@ -171,7 +171,7 @@ jobs:
 
 
 # =========================
-# 5. ZAP + REPORTING
+# 5. ZAP (frontend only, for now) + REPORTING
 # =========================
 
   zap:
@@ -221,51 +221,66 @@ jobs:
           name: zap
           path: zap-reports
 
+      - name: Cleanup app container
+        if: always()
+        run: docker rm -f app || true
 
-# =========================
-# 6. SEND REPORT TO API
-# =========================
+      # ---- Pull in every other job's scan results before building the report ----
 
-      - name: Build final JSON report
+      - name: Download gitleaks report
+        uses: actions/download-artifact@v4
+        with:
+          name: gitleaks
+
+      - name: Download semgrep report
+        uses: actions/download-artifact@v4
+        with:
+          name: semgrep
+
+      - name: Download trivy-fs report
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-fs
+
+      - name: Download trivy image reports
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-images
+
+      - name: Prepare files for report script
         run: |
+          # build_security_report.py expects trivy-image.json (singular) and
+          # zap.json at the workspace root - reshape what we actually produced
+          # into what it expects, without touching the script itself.
           python3 - << 'EOF'
-          import json, os
+          import json
 
           def load(p):
               try:
                   with open(p) as f:
                       return json.load(f)
-              except:
+              except Exception:
                   return {}
 
-          report = {
-              "deployment": {
-                  "sha": os.getenv("GITHUB_SHA"),
-                  "branch": os.getenv("GITHUB_REF_NAME"),
-                  "run_id": os.getenv("GITHUB_RUN_ID")
-              },
-              "scans": {
-                  "semgrep": load("semgrep.json"),
-                  "gitleaks": load("gitleaks.json"),
-                  "trivy_fs": load("trivy-fs.json"),
-                  "trivy_frontend": load("trivy-frontend.json"),
-                  "trivy_backend": load("trivy-backend.json"),
-                  "zap": load("zap.json")
-              }
+          merged = {
+              "frontend": load("trivy-frontend.json"),
+              "backend": load("trivy-backend.json"),
           }
-
-          with open("security-report.json", "w") as f:
-              json.dump(report, f, indent=2)
-
-          print("OK report generated")
+          with open("trivy-image.json", "w") as f:
+              json.dump(merged, f)
           EOF
+
+          cp zap-reports/zap.json zap.json || echo "{}" > zap.json
+
+      - name: Build final JSON report
+        run: python3 scripts/build_security_report.py
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
 
       - name: Send report
         run: |
           curl -X POST "$API_URL" \
             -H "Content-Type: application/json" \
             -d @security-report.json || true
-
-      - name: Cleanup
-        if: always()
-        run: docker rm -f app || true
