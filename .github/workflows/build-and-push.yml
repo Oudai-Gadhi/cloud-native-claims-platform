@@ -228,6 +228,7 @@ jobs:
       # ---- Pull in every other job's scan results before building the report ----
 
       - name: Download gitleaks report
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: gitleaks
