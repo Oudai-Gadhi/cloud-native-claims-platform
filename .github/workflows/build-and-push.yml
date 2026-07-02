@@ -1,4 +1,4 @@
-name: Full DevSecOps Pipeline
+name: Full DevSecOps Pipeline (CI/CD + Security)
 
 on:
   push:
@@ -7,75 +7,247 @@ on:
 permissions:
   contents: read
   packages: write
+  issues: write
 
 env:
-  API_URL: https://cherry-installed-limitation-charging.trycloudflare.com/api/security/reports
+  REGISTRY: ghcr.io
+  API_URL: https://island-astronomy-jobs-warriors.trycloudflare.com/api/security/reports
+
 
 jobs:
 
 # =========================
 # 1. SAST + SECRETS
 # =========================
-  security-scan:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gitleaks/gitleaks-action@v2
+
+
+  semgrep:
+    name: Static Application Security Testing (SAST)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: semgrep scan --config auto
+
+
+  trivy-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+
+# =========================
+# 2. BUILD (NO PUSH YET)
+# =========================
+  build-images:
+    needs: [gitleaks, semgrep, trivy-fs]
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------- SEMGREP ----------------
-      - name: Semgrep
+      - name: Set IMAGE_BASE lowercase
         run: |
-          pip install semgrep
-          semgrep scan --config auto --json > semgrep.json || true
+          IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_BASE=$IMAGE_BASE" >> $GITHUB_ENV
 
-      # ---------------- TRIVY FS ----------------
-      - name: Trivy FS
+      - name: Build frontend (LOCAL)
+        run: docker build -t frontend:test ./frontend
+
+      - name: Build backend (LOCAL)
+        run: docker build -t backend:test ./backend
+
+
+# =========================
+# 3. TRIVY IMAGE SCAN (LOCAL)
+# =========================
+  trivy-image:
+    needs: [build-images]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build frontend
+        run: docker build -t frontend:test ./frontend
+
+      - name: Build backend
+        run: docker build -t backend:test ./backend
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: frontend:test
+          severity: CRITICAL
+          exit-code: 0
+
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: backend:test
+          severity: CRITICAL,HIGH
+          exit-code: 0
+
+
+# =========================
+# 4. PUSH TO GHCR
+# =========================
+  push-images:
+    needs: [trivy-image]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set IMAGE_BASE lowercase
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
-          ./trivy fs --format json -o trivy-fs.json . || true
+          echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      # ---------------- GITLEAKS ----------------
-      - name: Gitleaks
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/frontend:latest
+            ${{ env.IMAGE_BASE }}/frontend:${{ github.sha }}
+
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/backend:latest
+            ${{ env.IMAGE_BASE }}/backend:${{ github.sha }}
+
+
+# =========================
+# 5. ZAP (DAST)
+# =========================
+  zap:
+    needs: [push-images]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set IMAGE_BASE lowercase
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks-linux-amd64.tar.gz | tar xz
-          ./gitleaks detect --report-format json --report-path gitleaks.json || true
+          echo "IMAGE_BASE=$(echo ghcr.io/${GITHUB_REPOSITORY} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      # ---------------- BUILD IMAGES ----------------
-      - name: Build Docker images
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull frontend image
+        run: docker pull $IMAGE_BASE/frontend:latest
+
+      - name: Run frontend container
         run: |
-          docker build -t frontend:test ./frontend
-          docker build -t backend:test ./backend
+          docker run -d -p 8080:8080 --name frontend $IMAGE_BASE/frontend:latest
 
-      # ---------------- TRIVY IMAGE ----------------
-      - name: Trivy Image
+      - name: Wait for app
         run: |
-          ./trivy image --format json -o trivy-image.json backend:test || true
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://localhost:8080; then
+              echo "App is up"
+              exit 0
+            fi
+            echo "Waiting for app... ($i)"
+            sleep 2
+          done
+          echo "App did not become ready in time"
+          docker logs frontend
+          exit 1
 
-      # ---------------- ZAP ----------------
-      - name: Run ZAP baseline
+      - name: Run OWASP ZAP
         run: |
-          docker run -d -p 8080:80 --name app frontend:test || true
-          sleep 10
-          docker run --network=host ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py -t http://localhost:8080 \
-            -J zap.json -r zap.html || true
+          mkdir -p zap-reports
+          docker run --rm \
+            --user root \
+            --network=host \
+            -v $PWD/zap-reports:/zap/wrk:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://localhost:8080 \
+            -J zap.json -w zap.md -r zap.html || true
 
-      # =========================
-      # 2. BUILD UNIFIED REPORT
-      # =========================
-      - name: Build security report
-        env:
-          COMMIT_SHA: ${{ github.sha }}
-          BRANCH: ${{ github.ref_name }}
-          RUN_ID: ${{ github.run_id }}
+      - name: Upload ZAP reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap-reports/
+
+
+# =========================
+# 6. NEW: BUILD + SEND SECURITY REPORT
+# =========================
+      - name: Build security report JSON
         run: |
-          python scripts/build_security_report.py
+          python3 - << 'EOF'
+          import json
+          import os
 
-      # =========================
-      # 3. SEND TO BACKEND
-      # =========================
+          def load(file):
+              try:
+                  with open(file) as f:
+                      return json.load(f)
+              except:
+                  return {}
+
+          report = {
+              "deployment": {
+                  "commit_sha": os.getenv("GITHUB_SHA"),
+                  "branch": os.getenv("GITHUB_REF_NAME"),
+                  "github_run_id": os.getenv("GITHUB_RUN_ID")
+              },
+              "scans": [
+                  {"tool": "SEMGREP", "report": load("semgrep.json")},
+                  {"tool": "TRIVY_FS", "report": load("trivy-fs.json")},
+                  {"tool": "TRIVY_IMAGE", "report": load("trivy-image.json")},
+                  {"tool": "GITLEAKS", "report": load("gitleaks.json")},
+                  {"tool": "ZAP", "report": load("zap.json")}
+              ]
+          }
+
+          with open("security-report.json", "w") as f:
+              json.dump(report, f, indent=2)
+
+          print("security-report.json created")
+          EOF
+
       - name: Send report to API
         run: |
           curl -X POST $API_URL \
             -H "Content-Type: application/json" \
             -d @security-report.json
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f frontend || true
