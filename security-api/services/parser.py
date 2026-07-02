@@ -1,5 +1,25 @@
 from services.fingerprint import generate_fingerprint
 
+
+
+
+def normalize_severity(tool, raw):
+    raw = (raw or "").upper()
+    if tool == "SEMGREP":
+        return {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW"}.get(raw, "LOW")
+    if tool == "ZAP":
+        return {"HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW", "INFORMATIONAL": "INFO"}.get(raw, "INFO")
+    # TRIVY and GITLEAKS already use CRITICAL/HIGH/MEDIUM/LOW natively
+    return raw or "LOW"
+
+
+
+
+
+
+
+
+
 def extract_findings(scan):
 
     tool = scan["tool"]
@@ -10,9 +30,10 @@ def extract_findings(scan):
     # ---------------- SEMGREP ----------------
     if tool == "SEMGREP":
         for r in report.get("results", []):
+            raw_sev = r.get("extra", {}).get("severity", "INFO")
             findings.append({
                 "tool": tool,
-                "severity": r.get("extra", {}).get("severity", "LOW"),
+                "severity": normalize_severity(tool, raw_sev),
                 "title": r.get("check_id"),
                 "description": r.get("extra", {}).get("message"),
                 "file_path": r.get("path"),
@@ -65,9 +86,10 @@ def extract_findings(scan):
     elif tool == "ZAP":
         for a in report.get("site", []):
             for alert in a.get("alerts", []):
+                raw_sev = alert.get("riskdesc", "").split(" ")[0]  # "Medium (Medium)" -> "Medium"
                 findings.append({
                     "tool": tool,
-                    "severity": alert.get("risk"),
+                    "severity": normalize_severity(tool, raw_sev),
                     "title": alert.get("name"),
                     "description": alert.get("desc"),
                     "url": alert.get("instances", [{}])[0].get("uri"),
