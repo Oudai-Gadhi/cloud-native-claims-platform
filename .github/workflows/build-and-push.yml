@@ -194,7 +194,7 @@ jobs:
         run: docker pull $IMAGE_BASE/frontend:latest
 
       - name: Run container
-        run: docker run -d -p 8080:80 --name app $IMAGE_BASE/frontend:latest
+        run: docker run -d -p 8080:8080 --name app $IMAGE_BASE/frontend:latest
 
       - name: Wait app
         run: |
