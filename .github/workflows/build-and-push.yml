@@ -11,7 +11,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  API_URL: https://island-astronomy-jobs-warriors.trycloudflare.com/api/security/reports
+  API_URL: https://poem-tags-greensboro-trusts.trycloudflare.com/api/security/reports
 
 
 jobs:
