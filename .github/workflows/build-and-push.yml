@@ -11,7 +11,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  API_URL: https://poem-tags-greensboro-trusts.trycloudflare.com/api/security/reports
+  API_URL: https://else-proof-authentication-jefferson.trycloudflare.com/api/security/reports
 
 
 jobs:
@@ -217,11 +217,17 @@ jobs:
       - name: Run ZAP
         run: |
           mkdir -p zap-reports
+          chmod -R 777 zap-reports
           docker run --rm --network=host \
             -v $PWD/zap-reports:/zap/wrk:rw \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py -t http://localhost:8080 \
             -J zap.json -w zap.md -r zap.html || true
+      - name: verify zap report was written
+        run: |
+          ls -la zap-reports/
+          test -f zap-reports/zap.json && echo "zap.json present" || echo "::warning::zap.json missing after ZAP run"
+
 
       - name: Upload ZAP
         uses: actions/upload-artifact@v4
