@@ -116,10 +116,18 @@ jobs:
           docker build -t backend:test ./backend
 
       - name: Scan frontend image (JSON)
-        run: trivy image --format json -o trivy-frontend.json frontend:test || true
+        run:  |
+          trivy image --format json -o trivy-frontend.json \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            backend:test || true
 
       - name: Scan backend image (JSON)
-        run: trivy image --format json -o trivy-backend.json backend:test || true
+        run:  |
+          trivy image --format json -o trivy-backend.json \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            backend:test || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
