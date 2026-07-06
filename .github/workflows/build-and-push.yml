@@ -263,9 +263,10 @@ jobs:
               except Exception:
                   return {}
 
+          fe = load("trivy-frontend.json")
+          be = load("trivy-backend.json")
           merged = {
-              "frontend": load("trivy-frontend.json"),
-              "backend": load("trivy-backend.json"),
+               "Results": (fe.get("Results") or []) + (be.get("Results") or [])
           }
           with open("trivy-image.json", "w") as f:
               json.dump(merged, f)
