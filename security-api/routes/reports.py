@@ -76,7 +76,9 @@ def ingest_report():
                     %s,
                     'OPEN'
                 )
-                ON CONFLICT (fingerprint) DO NOTHING
+                ON CONFLICT (fingerprint) DO UPDATE SET 
+                    scan_id = EXCLUDED.scan_id,
+                    updated_at = NOW() 
             """, (
                 scan_id,
                 f.get("tool"),
