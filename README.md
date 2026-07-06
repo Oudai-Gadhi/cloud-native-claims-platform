@@ -1,6 +1,6 @@
 # Insurance Accident Declaration Web Application
 
-A full-stack solution for digital insurance accident declarations, built with FastAPI (Python), React (TypeScript), and MySQL.
+ A full-stack solution for digital insurance accident declarations, built with FastAPI (Python), React (TypeScript), and MySQL.
 
 ## Features
 - **Client Declaration Form**: Submit personal info, vehicle details, and accident reports.
