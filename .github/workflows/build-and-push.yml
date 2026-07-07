@@ -11,7 +11,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  API_URL: https://else-proof-authentication-jefferson.trycloudflare.com/api/security/reports
+  API_URL: https://folding-geographic-vic-parents.trycloudflare.com/api/security/reports
 
 
 jobs:
@@ -120,7 +120,7 @@ jobs:
           trivy image --format json -o trivy-frontend.json \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \
-            backend:test || true
+            frontend:test || true
 
       - name: Scan backend image (JSON)
         run:  |
@@ -299,4 +299,5 @@ jobs:
         run: |
           curl -X POST "$API_URL" \
             -H "Content-Type: application/json" \
+            -H "X-API-KEY: ${{ secrets.API_KEY }}" \
             -d @security-report.json || true

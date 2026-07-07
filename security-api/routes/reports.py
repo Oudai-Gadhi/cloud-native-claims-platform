@@ -1,15 +1,18 @@
 from flask import Blueprint, request, jsonify
 from db import get_conn
 from services.parser import extract_findings
-
+import os 
 import json
-
+REPORT_API_KEY= os.environ["API_KEY"]
 reports_bp = Blueprint("reports", __name__)
 
 @reports_bp.route("/api/security/reports", methods=["POST"])
 def ingest_report():
 
     data = request.json
+    if request.headers.get("X-API-Key") != REPORT_API_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
 
     conn = get_conn()
     cur = conn.cursor()
