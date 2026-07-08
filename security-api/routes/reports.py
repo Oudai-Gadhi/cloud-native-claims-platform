@@ -3,9 +3,10 @@ from db import get_conn
 from services.parser import extract_findings
 import os 
 import json
+from dotenv import load_dotenv
+load_dotenv()
 REPORT_API_KEY= os.environ["API_KEY"]
 reports_bp = Blueprint("reports", __name__)
-
 @reports_bp.route("/api/security/reports", methods=["POST"])
 def ingest_report():
 

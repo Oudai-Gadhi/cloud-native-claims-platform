@@ -11,7 +11,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  API_URL: https://folding-geographic-vic-parents.trycloudflare.com/api/security/reports
+  API_URL: https://identity-patio-overhang.ngrok-free.dev/api/security/reports
 
 
 jobs:
