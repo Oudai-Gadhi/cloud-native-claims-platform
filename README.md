@@ -53,6 +53,6 @@
 - `docker-compose.yml`: Orchestration config.
 - `.env`: Database credentials and environment variables.
 
-## Notes
+##Notes
 - Uploaded files are stored in `backend/uploads`. In the Docker version, these are mapped to a volume to persist data.
 - The MySQL database data is persisted in a Docker volume named `mysql_data`.
