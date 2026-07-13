@@ -413,4 +413,5 @@ jobs:
           curl -X POST "$API_URL" \
             -H "Content-Type: application/json" \
             -H "X-API-KEY: ${{ secrets.API_KEY }}" \
-            -d @security-report.json || true
+            -d @security-report.json \
+            -w "\nHTTP_STATUS:%{http_code}\n"
