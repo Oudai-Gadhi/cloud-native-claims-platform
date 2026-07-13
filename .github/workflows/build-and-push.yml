@@ -363,15 +363,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Security Reports
+      - name: Download Gitleaks Report
         uses: actions/download-artifact@v4
         with:
-          path: workspace-artifacts
-          pattern: |
-            gitleaks*
-            semgrep*
-            trivy*
-            zap*
+          name: gitleaks-results.sarif
+          path: workspace-artifacts/gitleaks
+
+      - name: Download Semgrep Report
+        uses: actions/download-artifact@v4
+        with:
+          name: semgrep
+          path: workspace-artifacts/semgrep
+
+      - name: Download Trivy FS Report
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-fs
+          path: workspace-artifacts/trivy-fs
+
+      - name: Download Trivy Images Report
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-images
+          path: workspace-artifacts/trivy-images
+
+      - name: Download ZAP Report
+        uses: actions/download-artifact@v4
+        with:
+          name: zap
+          path: workspace-artifacts/zap
+
+      - name: Download ZAP Backend Report
+        uses: actions/download-artifact@v4
+        with:
+          name: zap-backend
+          path: workspace-artifacts/zap-backend
 
       - name: Flatten and Merge Scan Results
         run: |
