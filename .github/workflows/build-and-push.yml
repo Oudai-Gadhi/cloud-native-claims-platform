@@ -239,6 +239,117 @@ jobs:
         if: always()
         run: docker rm -f app || true
 
+# =========================
+# 5b. ZAP (backend, authenticated API scan)
+# =========================
+
+  zap-backend:
+    needs: [push-images]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set IMAGE_BASE
+        run: echo "IMAGE_BASE=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create network
+        run: docker network create zap-backend-net
+
+      - name: Start throwaway MySQL
+        run: |
+          docker run -d --name mysql --network zap-backend-net \
+            -e MYSQL_ROOT_PASSWORD=rootpassword \
+            -e MYSQL_DATABASE=insurance \
+            mysql:8
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            docker exec mysql mysqladmin ping -h localhost -uroot -prootpassword --silent && exit 0
+            sleep 2
+          done
+          docker logs mysql
+          exit 1
+
+      - name: Pull backend image
+        run: docker pull $IMAGE_BASE/backend:latest
+
+      - name: Run backend container
+        run: |
+          docker run -d -p 8000:8000 --name backend-app --network zap-backend-net \
+            -e JWT_SECRET="${{ secrets.ZAP_JWT }}" \
+            -e DATABASE_URL="mysql+pymysql://root:rootpassword@mysql:3306/insurance" \
+            -e COOKIE_SECURE=false \
+            $IMAGE_BASE/backend:latest
+
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/api/car-models && exit 0
+            sleep 2
+          done
+          docker logs backend-app
+          exit 1
+
+      - name: Seed a test admin user
+        run: |
+          pip install passlib[bcrypt] --break-system-packages -q
+          HASH=$(python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('ZapTest123!'))")
+          docker exec mysql mysql -uroot -prootpassword insurance -e \
+            "INSERT INTO admin_users (username, password_hash, is_active) VALUES ('zap_scanner', '$HASH', 1);"
+
+      - name: Log in and capture session cookie
+        run: |
+          curl -s -c cookies.txt -X POST http://localhost:8000/api/login \
+            -H "Content-Type: application/json" \
+            -d '{"username":"zap_scanner","password":"ZapTest123!"}'
+          COOKIE_VALUE=$(grep star_admin_session cookies.txt | awk '{print $NF}')
+          echo "SESSION_COOKIE=star_admin_session=$COOKIE_VALUE" >> $GITHUB_ENV
+
+      - name: Run ZAP API scan (authenticated)
+        run: |
+          mkdir -p zap-backend-reports
+          chmod -R 777 zap-backend-reports
+          docker run --rm --network=host \
+            -v $PWD/zap-backend-reports:/zap/wrk:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py -t http://localhost:8000/openapi.json -f openapi \
+            -J zap-backend.json -w zap-backend.md -r zap-backend.html \
+            -z "-config replacer.full_list(0).description=auth \
+                -config replacer.full_list(0).enabled=true \
+                -config replacer.full_list(0).matchtype=REQ_HEADER \
+                -config replacer.full_list(0).matchstr=Cookie \
+                -config replacer.full_list(0).regex=false \
+                -config replacer.full_list(0).replacement=${{ env.SESSION_COOKIE }}" || true
+
+      - name: Verify report was written
+        run: |
+          ls -la zap-backend-reports/
+          test -f zap-backend-reports/zap-backend.json && echo "present" || echo "::warning::zap-backend.json missing"
+
+      - name: Upload ZAP backend report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-backend
+          path: zap-backend-reports
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f backend-app mysql || true
+          docker network rm zap-backend-net || true
+
+
+
+
       # ---- Pull in every other job's scan results before building the report ----
 
       - name: Download gitleaks report
