@@ -7,7 +7,9 @@ def load(file):
             return json.load(f)
     except:
         return {}
-
+gitleaks_data = load("gitleaks.json")
+# If gitleaks output is a native list, wrap it. If it's already an empty dict {}, change it.
+gitleaks_report = {"leaks": gitleaks_data} if isinstance(gitleaks_data, list) else {"leaks": []}
 report = {
     "deployment": {
         "commit_sha": os.getenv("COMMIT_SHA"),
@@ -19,7 +21,7 @@ report = {
         {"tool": "SEMGREP", "report": load("semgrep.json")},
         {"tool": "TRIVY_FS", "report": load("trivy-fs.json")},
         {"tool": "TRIVY_IMAGE", "report": load("trivy-image.json")},
-        {"tool": "GITLEAKS", "report": load("gitleaks.json")},
+        {"tool": "GITLEAKS", "report": gitleaks_report},
         {"tool": "ZAP", "report": load("zap.json")}
     ]
 }
