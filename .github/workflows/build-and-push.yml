@@ -325,7 +325,6 @@ jobs:
             ghcr.io/zaproxy/zaproxy:stable \
             zap-api-scan.py -t http://localhost:8000/openapi.json -f openapi \
             -J zap-backend.json -w zap-backend.md -r zap-backend.html \
-            -A \
             -z "-config replacer.full_list(0).description=auth \
                 -config replacer.full_list(0).enabled=true \
                 -config replacer.full_list(0).matchtype=REQ_HEADER \
@@ -351,46 +350,34 @@ jobs:
           docker network rm zap-backend-net || true
 
 
+# =========================
+# 6. CENTRAL SECURITY REPORTING
+# =========================
 
+  send-security-report:
+    # Wait until every security tool has safely completed and uploaded its artifacts
+    needs: [gitleaks, semgrep, trivy-fs, trivy-image, zap, zap-backend]
+    runs-on: ubuntu-latest
+    if: always() # Runs even if security findings caused earlier exit codes
 
-      # ---- Pull in every other job's scan results before building the report ----
+    steps:
+      - uses: actions/checkout@v4
 
-
-      - name: Download frontend ZAP report
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: zap
-          path: zap-reports
-
-      - name: Download gitleaks report
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: gitleaks
-
-      - name: Download semgrep report
+      - name: Download all scan artifacts
         uses: actions/download-artifact@v4
         with:
-          name: semgrep
+          path: workspace-artifacts
 
-      - name: Download trivy-fs report
-        uses: actions/download-artifact@v4
-        with:
-          name: trivy-fs
-
-      - name: Download trivy image reports
-        uses: actions/download-artifact@v4
-        with:
-          name: trivy-images
-
-      - name: Prepare files for report script
+      - name: Flatten and Merge Scan Results
         run: |
-          # build_security_report.py expects trivy-image.json (singular) and
-          # zap.json at the workspace root - reshape what we actually produced
-          # into what it expects, without touching the script itself.
+          # Move files to base directories expected by build_security_report.py
+          cp workspace-artifacts/gitleaks/gitleaks.json . || echo "[]" > gitleaks.json
+          cp workspace-artifacts/semgrep/semgrep.json . || echo "{}" > semgrep.json
+          cp workspace-artifacts/trivy-fs/trivy-fs.json . || echo "{}" > trivy-fs.json
+
           python3 - << 'EOF'
           import json
+          import os
 
           def load(p):
               try:
@@ -399,21 +386,22 @@ jobs:
               except Exception:
                   return {}
 
-          fe = load("trivy-frontend.json")
-          be = load("trivy-backend.json")
-          merged = {
-               "Results": (fe.get("Results") or []) + (be.get("Results") or [])
+          # ---- 1. Merge Trivy Image Reports ----
+          fe_trivy = load("workspace-artifacts/trivy-images/trivy-frontend.json")
+          be_trivy = load("workspace-artifacts/trivy-images/trivy-backend.json")
+          merged_trivy = {
+               "Results": (fe_trivy.get("Results") or []) + (be_trivy.get("Results") or [])
           }
           with open("trivy-image.json", "w") as f:
-              json.dump(merged, f)
-          fe_zap = load("zap-reports/zap.json")
-          be_zap= load("zap-backend-reports/zap-backend.json")
-          # ZAP JSON reports group vulnerabilities under a site-by-site schema:
-          # ["OWASPZAPReport"]["site"] which contains a list of scanned endpoints and alerts
+              json.dump(merged_trivy, f)
+
+          # ---- 2. Merge ZAP Frontend & Backend Reports ----
+          fe_zap = load("workspace-artifacts/zap/zap.json")
+          be_zap = load("workspace-artifacts/zap-backend/zap-backend.json")
+
           fe_site = fe_zap.get("OWASPZAPReport", {}).get("site", [])
           be_site = be_zap.get("OWASPZAPReport", {}).get("site", [])
           
-          # Force sites into lists to ensure clean concatenation
           if not isinstance(fe_site, list): fe_site = [fe_site] if fe_site else []
           if not isinstance(be_site, list): be_site = [be_site] if be_site else []
 
@@ -424,7 +412,6 @@ jobs:
                   "site": fe_site + be_site
               }
           }
-
           with open("zap.json", "w") as f:
               json.dump(merged_zap, f)
           EOF
@@ -436,10 +423,15 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
 
-      - name: Send report
+      - name: Send report to Webhook
         run: |
           curl -X POST "$API_URL" \
             -H "Content-Type: application/json" \
             -H "X-API-KEY: ${{ secrets.API_KEY }}" \
             -d @security-report.json \
             -w "\nHTTP_STATUS:%{http_code}\n"
+
+      
+
+
+   
