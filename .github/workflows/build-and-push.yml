@@ -430,19 +430,13 @@ jobs:
           fe_zap = load("workspace-artifacts/zap/zap.json")
           be_zap = load("workspace-artifacts/zap-backend/zap-backend.json")
 
-          fe_site = fe_zap.get("OWASPZAPReport", {}).get("site", [])
-          be_site = be_zap.get("OWASPZAPReport", {}).get("site", [])
+          fe_site = fe_zap.get("site", [])
+          be_site = be_zap.get("site", [])
           
           if not isinstance(fe_site, list): fe_site = [fe_site] if fe_site else []
           if not isinstance(be_site, list): be_site = [be_site] if be_site else []
 
-          merged_zap = {
-              "OWASPZAPReport": {
-                  "version": fe_zap.get("OWASPZAPReport", {}).get("version", "Generated"),
-                  "generated": fe_zap.get("OWASPZAPReport", {}).get("generated", ""),
-                  "site": fe_site + be_site
-              }
-          }
+          merged_zap = {"site": fe_site + be_site}
           with open("zap.json", "w") as f:
               json.dump(merged_zap, f)
           EOF
