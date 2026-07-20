@@ -89,7 +89,7 @@ MAGIC_SIGNATURES = {
 }
 
 # --- Database Setup ---
-DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://user:userpassword@db:3306/insurance_db")
+DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
